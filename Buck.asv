@@ -1,0 +1,127 @@
+%% Projeto Controlador p/ conv. Buck com metodologia de Servosistemas
+format long;
+clear all;
+close all;
+clc;
+
+%% Parâmetros da planta original
+delta1 = 4.2;       % Tensão pico a pico medida no sobressinal
+delta2 = 20;        % Tensão pico a pico medida de 0 a regime
+tp = 143.5e-6;      % Tempo de instante do pico
+
+%% Cálculos para determinação da FT da planta a ser controlada
+Mp_p = delta1/delta2;                         % Sobressinal
+zeta_p = -log(Mp_p)/sqrt(pi^2 + log(Mp_p)^2); % Fator de amortecimento
+wn_p = pi/(tp*sqrt(1 - zeta_p^2));            % Frequência natual
+Vi = 36.95;
+
+% Lembrando que G(s) = wn^2 / 1 + 2*zeta*wn + wn^2
+A_p = Vi*wn_p^2;                    % Numerador da FT
+B_p = 2*zeta_p*wn_p;                % Fator central da FT
+Gps = tf(A_p,[1 B_p A_p]);          % FT da planta original
+
+% Transformação da FT no domínio 's' para Espaço de Estados
+ss_Gps = ss(Gps);
+% Transformação do Espaço de Estados para formato canônico de Espaço de
+% Estado. Ver: https://www.mathworks.com/help/control/ref/canon.html
+canon_Gps = canon(ss_Gps,'companion');
+
+% Matrizes da representação do sistema em espaços de estados
+% Forma canônica observável
+% A = canon_Gps.A';
+% B = canon_Gps.C';
+% C = canon_Gps.B';
+% D = 0;
+
+% Matrizes da representação do sistema em espaços de estados
+% Forma canônica controlável
+% A = canon_Gps.A;
+% B = canon_Gps.B;
+% C = canon_Gps.C;
+% D = 0;
+
+%% Pré-requisitos do projeto:
+%  Degrau de referência de 1,0 a 1,5 V
+%  Ts5% igual a metade do valor obtido em malha aberta
+%  Erro nulo em regime permanente para resposta ao degrau
+%  Sobressinal menor que 10%
+%  Estabilidade
+
+Mp = 0.05;
+ts5 = 100e-6;
+
+% Cálculo de zeta e wn a partir do pré-requisitos supra citados
+zeta = log(Mp)/sqrt(pi^2 + log(Mp)^2);
+wn = 3/(zeta*ts5);
+
+% Polos Alocados
+p1 = -zeta*wn +(wn*sqrt(1-zeta^2))*i;
+p2 = -zeta*wn -(wn*sqrt(1-zeta^2))*i;
+p3 = -abs(p1)*1.5;
+
+% Matriz de polos para determinação da matriz de ganho K de retroação
+% de estados
+pK = [p1 p2 p3];
+
+%% Discretização do integrador do Observador de Estados
+T = ts5/10;
+
+%% Projeto da matriz de ganho K de retroação de estados
+% Valores de resistores e capacitores ideais da planta
+R = 11.3;
+L = 433e-6;
+C = 4.1e-6;
+Vi = 36.95;
+
+A=[0 -1/L; 1/C -1/(R*C)];
+B=[Vi/L; 0];
+C=[0 1];
+D=0;
+
+sys = ss(A,B,C,D);
+Gps = tf(sys);
+
+% Matrizes auxilires para transformações
+E=[0;0];
+F=0;
+
+% Matrizes A e B para cálculo da matriz de ganho K
+Ach = [A E; -C F];
+Bch = [B; F];
+
+% Matriz de ganho K de retroação de estados
+Kch = place(Ach,Bch,pK);
+Teste = eig(Ach-Bch*Kch);
+
+%% Criação de sistema para teste no matlab
+AA = (Ach-Bch*Kch);
+BB = [0;0;1];
+CC = [C 0];
+DD = 0;
+
+% Geração da resposta controlada ao degrau
+t = 0:0.000001:0.001;
+opt = stepDataOptions('InputOffset',0,'StepAmplitude',20);
+sys = ss(AA,BB,CC,DD);
+y = step(sys,t,opt);
+stepinfo(y,t,1,'SettlingTimeThreshold',0.05,'RiseTimeLimits',[0.1 0.9])
+plot(t,y);
+grid on;
+title('Uni-Step Response');
+xlabel('t [s]');
+ylabel('Output y');
+
+%% Verificação da controlabilidade e observabilidade do sistema 
+sys = ss(A,B,C,D);
+Co = ctrb(sys);
+Ob = obsv(sys);
+k1 = rank(Co);
+k2 = rank(Ob);
+
+%% Discretização do integrador do Observador de Estados
+wn = abs(p1);
+zeta = -real(p1)/wn;
+ts5 = 3/(zeta*wn);
+T = ts5/10;
+Gs = tf(1,[1 0]);
+Gz = c2d(Gs,T);
